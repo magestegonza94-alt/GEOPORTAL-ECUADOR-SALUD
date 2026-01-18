@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Geoportal Ecuador</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; }
+    #map { width: 100%; height: 100vh; }
+    .info-panel {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: white;
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      z-index: 1000;
+      max-width: 300px;
+    }
+    .info-panel h3 { margin-bottom: 10px; font-size: 16px; }
+    .info-panel p { margin: 5px 0; font-size: 14px; }
+    .layer-control {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: white;
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      z-index: 1000;
+    }
+    .layer-control label {
+      display: block;
+      margin: 8px 0;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .layer-control input { margin-right: 8px; }
+    .loading { color: #666; font-style: italic; }
+    .error { color: #e53e3e; }
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.3);
+      z-index: 2000;
+      pointer-events: none;
+    }
+    .modal.active { display: block; }
+    .modal-content {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: white;
+      padding: 25px;
+      border-radius: 12px;
+      max-width: 500px;
+      width: 90%;
+      max-height: 80vh;
+      overflow-y: auto;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+      pointer-events: auto;
+    }
+    .modal-content.minimized {
+      top: auto;
+      bottom: 20px;
+      left: 20px;
+      transform: none;
+      max-width: 350px;
+      max-height: 60px;
+      overflow: hidden;
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+    .modal-header h2 {
+      margin: 0;
+      font-size: 20px;
+    }
+    .modal-controls {
+      display: flex;
+      gap: 5px;
+    }
+    .modal-btn {
+      background: #e5e7eb;
+      border: none;
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-btn:hover {
+      background: #d1d5db;
+    }
+    .form-group {
+      margin-bottom: 15px;
+    }
+    .form-group label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .form-group input,
+    .form-group select,
+    .form-group textarea {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: system-ui, sans-serif;
+    }
+    .form-group textarea {
+      resize: vertical;
+      min-height: 60px;
+    }
+    .form-buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+    .btn {
+      flex: 1;
+      padding: 10px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .btn-primary {
+      background: #2563eb;
+      color: white;
+    }
+    .btn-secondary {
+      background: #6b7280;
+      color: white;
+    }
+    .btn:hover {
+      opacity: 0.9;
+    }
+    .coord-inputs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .success-message {
+      background: #10b981;
+      color: white;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 15px;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  
+  <div class="layer-control">
+    <h3>🗺️ Capas</h3>
+    <label><input type="checkbox" id="layer-centros" checked> Centros de Salud</label>
+    <label><input type="checkbox" id="layer-poblados" checked> Poblados</label>
+    <label><input type="checkbox" id="layer-uso" checked> Uso de Suelo</label>
+    <label><input type="checkbox" id="layer-vias" checked> Vías</label>
+    <hr style="margin: 10px 0; border: none; border-top: 1px solid #ddd;">
+    <button id="btn-reporte" style="width: 100%; padding: 8px; background: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">📝 Crear Reporte</button>
+  </div>
+
+  <div class="info-panel" id="info">
+    <h3>📍 Información</h3>
+    <p>Haz clic en el mapa para identificar el cantón</p>
+  </div>
+
+  <div class="modal" id="modal-reporte">
+    <div class="modal-content" id="modal-content-reporte">
+      <div class="modal-header">
+        <h2>📝 Crear Reporte</h2>
+        <div class="modal-controls">
+          <button type="button" class="modal-btn" id="btn-minimizar" title="Minimizar">−</button>
+          <button type="button" class="modal-btn" id="btn-cerrar-modal" title="Cerrar">×</button>
+        </div>
+      </div>
+      
+      <div id="modal-body">
+        <div id="success-msg" style="display: none;" class="success-message">
+          ✓ Reporte guardado exitosamente
+        </div>
+        
+        <form id="form-reporte">
+        <div class="form-group">
+          <label>Nombre del Reportante *</label>
+          <input type="text" id="nombre-reportante" placeholder="Su nombre completo" required>
+        </div>
+
+        <div class="form-group">
+          <label>Tipo de Reporte *</label>
+          <select id="tipo-reporte" required>
+            <option value="">Seleccione...</option>
+            <option value="establecimiento">Nuevo Establecimiento de Salud</option>
+            <option value="via">Nueva Vía</option>
+            <option value="otro">Otro</option>
+          </select>
+        </div>
+
+        <div id="fields-establecimiento" style="display: none;">
+          <div class="form-group">
+            <label>Nombre del Establecimiento *</label>
+            <input type="text" id="nombre-establecimiento" placeholder="Ej: Centro de Salud El Paraíso">
+          </div>
+          <div class="form-group">
+            <label>Tipo de Establecimiento *</label>
+            <select id="tipo-establecimiento">
+              <option value="">Seleccione...</option>
+              <option value="Centro de Salud">Centro de Salud</option>
+              <option value="Hospital">Hospital</option>
+              <option value="Dispensario">Dispensario</option>
+              <option value="Clínica">Clínica</option>
+              <option value="Otro">Otro</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Horario de Atención *</label>
+            <input type="text" id="horario-atencion" placeholder="Ej: Lunes a Viernes 8:00 - 16:00">
+          </div>
+          <div class="form-group">
+            <label>Vía de Ingreso</label>
+            <input type="text" id="via-ingreso-establecimiento" placeholder="Ej: Av. Principal">
+          </div>
+        </div>
+
+        <div id="fields-via" style="display: none;">
+          <div class="form-group">
+            <label>Nombre de la Vía *</label>
+            <input type="text" id="nombre-via" placeholder="Ej: Av. Principal">
+          </div>
+          <div class="form-group">
+            <label>Tipo de Vía *</label>
+            <select id="tipo-via">
+              <option value="">Seleccione...</option>
+              <option value="Avenida">Avenida</option>
+              <option value="Calle">Calle</option>
+              <option value="Carretera">Carretera</option>
+              <option value="Camino">Camino</option>
+              <option value="Otro">Otro</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Ubicación *</label>
+          <div class="coord-inputs">
+            <div>
+              <input type="number" step="any" id="lat-manual" placeholder="Latitud" required>
+            </div>
+            <div>
+              <input type="number" step="any" id="lng-manual" placeholder="Longitud" required>
+            </div>
+          </div>
+          <div style="display: flex; gap: 10px; margin-top: 10px;">
+            <button type="button" class="btn btn-secondary" id="btn-usar-gps" style="flex: 1; padding: 8px; font-size: 13px;">
+              📍 Usar mi ubicación GPS
+            </button>
+          </div>
+          <small style="color: #666; display: block; margin-top: 5px;">Haga clic en el mapa o use su GPS para seleccionar la ubicación</small>
+        </div>
+
+        <div class="form-group">
+          <label>Comentarios / Observaciones</label>
+          <textarea id="comentario" placeholder="Información adicional..."></textarea>
+        </div>
+
+        <div class="form-buttons">
+          <button type="button" class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Guardar Reporte</button>
+        </div>
+      </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const URL = 'https://gdrstyerlkwqvuitsmne.supabase.co/rest/v1';
+    const KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdkcnN0eWVybGt3cXZ1aXRzbW5lIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU4MzAzNTEsImV4cCI6MjA4MTQwNjM1MX0.WqCccdBATTF0GSaAq3BP-Ug0jjfSimCEc03fILqzSvs';
+    const headers = { 'apikey': KEY, 'Authorization': `Bearer ${KEY}` };
+
+    // Inicializar mapa centrado en Ecuador
+    const map = L.map('map').setView([-1.5, -78.5], 7);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    // Grupos de capas
+    const layers = {
+      centros_salud: L.layerGroup().addTo(map),
+      poblados_re: L.layerGroup().addTo(map),
+      uso_actual_suelo_re: L.layerGroup().addTo(map),
+      vias_rep: L.layerGroup().addTo(map)
+    };
+
+    // Estilos para cada tipo de capa
+    const styles = {
+      centros_salud: { color: '#e53e3e', radius: 6, fillOpacity: 0.7 },
+      poblados_re: { color: '#3182ce', radius: 4, fillOpacity: 0.6 },
+      uso_actual_suelo_re: { color: '#10b981', weight: 1, opacity: 0.5, fillOpacity: 0.3 },
+      vias_rep: { color: '#f59e0b', weight: 2, opacity: 0.6 }
+    };
+
+    // Cache para cantones
+    let cantonesCache = null;
+
+    // Cargar datos de cada capa
+    async function loadLayer(tableName) {
+      try {
+        let allData = [];
+        
+        // Para capas que necesitan carga completa
+        if (tableName === 'uso_actual_suelo_re' || tableName === 'centros_salud' || tableName === 'vias_rep') {
+          const batchSize = 500;
+          let offset = 0;
+          let emptyCount = 0;
+          
+          console.log(`Iniciando carga completa de ${tableName}...`);
+          
+          while (emptyCount < 2) {
+            try {
+              const res = await fetch(`${URL}/${tableName}?select=*&limit=${batchSize}&offset=${offset}`, { headers });
+              
+              if (!res.ok) {
+                console.warn(`Error en offset ${offset} de ${tableName}`);
+                offset += batchSize;
+                await sleep(200);
+                continue;
+              }
+              
+              const batch = await res.json();
+              
+              if (batch.length === 0) {
+                emptyCount++;
+              } else {
+                emptyCount = 0;
+                allData = allData.concat(batch);
+                console.log(`${tableName}: Cargados ${allData.length} elementos...`);
+              }
+              
+              offset += batchSize;
+              await sleep(100);
+              
+              // Límite de seguridad
+              if (offset >= 10000) break;
+              
+            } catch (e) {
+              console.warn(`Error en lote de ${tableName}:`, e);
+              offset += batchSize;
+              await sleep(200);
+            }
+          }
+          
+          console.log(`✓ ${tableName}: Total cargado ${allData.length} elementos`);
+          
+        } else {
+          // Para poblados, cargar normalmente
+          const limit = 1000;
+          const res = await fetch(`${URL}/${tableName}?select=*&limit=${limit}`, { headers });
+          
+          if (!res.ok) {
+            console.error(`Error ${res.status} cargando ${tableName}`);
+            return;
+          }
+          
+          allData = await res.json();
+          console.log(`Cargados ${allData.length} elementos de ${tableName}`);
+        }
+        
+        // Procesar y agregar features al mapa
+        allData.forEach(feature => {
+          if (!feature.geom) return;
+          
+          try {
+            const geom = typeof feature.geom === 'string' ? JSON.parse(feature.geom) : feature.geom;
+            const style = styles[tableName];
+            
+            let layer;
+            let coordinates;
+            
+            if (geom.type === 'Point') {
+              coordinates = [geom.coordinates[1], geom.coordinates[0]];
+              layer = L.circleMarker(coordinates, style);
+            } else if (geom.type === 'LineString') {
+              coordinates = geom.coordinates.map(c => [c[1], c[0]]);
+              layer = L.polyline(coordinates, style);
+            } else if (geom.type === 'Polygon') {
+              coordinates = geom.coordinates[0].map(c => [c[1], c[0]]);
+              layer = L.polygon(coordinates, style);
+            } else if (geom.type === 'MultiLineString') {
+              coordinates = geom.coordinates.map(line => line.map(c => [c[1], c[0]]));
+              layer = L.polyline(coordinates, style);
+            } else if (geom.type === 'MultiPolygon') {
+              coordinates = geom.coordinates.map(poly => poly[0].map(c => [c[1], c[0]]));
+              layer = L.polygon(coordinates, style);
+            }
+            
+            if (layer) {
+              // Agregar evento click a cada feature
+              layer.on('click', async (e) => {
+                L.DomEvent.stopPropagation(e);
+                
+                const latlng = e.latlng;
+                await identifyCanton(latlng.lat, latlng.lng, feature, tableName);
+              });
+              
+              // Popup básico
+              const props = Object.keys(feature)
+                .filter(k => k !== 'geom' && feature[k] && k.length < 30)
+                .slice(0, 5)
+                .map(k => `<b>${k}:</b> ${String(feature[k]).substring(0, 50)}`)
+                .join('<br>');
+              if (props) layer.bindPopup(props);
+              
+              layer.addTo(layers[tableName]);
+            }
+          } catch (e) {
+            console.error(`Error procesando feature de ${tableName}:`, e);
+          }
+        });
+      } catch (e) {
+        console.error(`Error cargando ${tableName}:`, e);
+      }
+    }
+
+    // Cargar todas las capas
+    Object.keys(layers).forEach(loadLayer);
+
+    // Control de visibilidad de capas
+    document.getElementById('layer-centros').addEventListener('change', (e) => {
+      e.target.checked ? layers.centros_salud.addTo(map) : map.removeLayer(layers.centros_salud);
+    });
+    document.getElementById('layer-poblados').addEventListener('change', (e) => {
+      e.target.checked ? layers.poblados_re.addTo(map) : map.removeLayer(layers.poblados_re);
+    });
+    document.getElementById('layer-uso').addEventListener('change', (e) => {
+      e.target.checked ? layers.uso_actual_suelo_re.addTo(map) : map.removeLayer(layers.uso_actual_suelo_re);
+    });
+    document.getElementById('layer-vias').addEventListener('change', (e) => {
+      e.target.checked ? layers.vias_rep.addTo(map) : map.removeLayer(layers.vias_rep);
+    });
+
+    // Función para esperar un tiempo determinado
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    // Cargar cantones de forma gradual
+    async function loadCantones() {
+      if (cantonesCache) return cantonesCache;
+      
+      const infoPanel = document.getElementById('info');
+      
+      try {
+        const batchSize = 10; // Lotes muy pequeños
+        let offset = 0;
+        let allCantones = [];
+        let emptyCount = 0;
+        
+        while (emptyCount < 2) {
+          try {
+            infoPanel.innerHTML = `
+              <h3>⏳ Cargando cantones...</h3>
+              <p class="loading">Cargados: ${allCantones.length}</p>
+            `;
+            
+            const res = await fetch(
+              `${URL}/canton_re?select=dpa_descan,geom&limit=${batchSize}&offset=${offset}`, 
+              { headers }
+            );
+            
+            if (!res.ok) {
+              console.warn(`Error en offset ${offset}, continuando...`);
+              offset += batchSize;
+              await sleep(200); // Esperar un poco más si hay error
+              continue;
+            }
+            
+            const batch = await res.json();
+            
+            if (batch.length === 0) {
+              emptyCount++;
+              offset += batchSize;
+            } else {
+              emptyCount = 0;
+              allCantones = allCantones.concat(batch);
+              offset += batchSize;
+            }
+            
+            // Pequeña pausa entre peticiones para no saturar
+            await sleep(100);
+            
+            // Límite de seguridad
+            if (offset >= 500) break;
+            
+          } catch (e) {
+            console.warn(`Error en offset ${offset}:`, e);
+            offset += batchSize;
+            await sleep(200);
+          }
+        }
+        
+        cantonesCache = allCantones;
+        console.log(`✓ Cargados ${allCantones.length} cantones exitosamente`);
+        
+        infoPanel.innerHTML = `
+          <h3>📍 Información</h3>
+          <p>Haz clic en el mapa para identificar el cantón</p>
+          <p style="font-size:12px; color:#666;">${allCantones.length} cantones cargados</p>
+        `;
+        
+        return allCantones;
+      } catch (e) {
+        console.error('Error cargando cantones:', e);
+        infoPanel.innerHTML = `
+          <h3>📍 Información</h3>
+          <p class="error">Error cargando cantones</p>
+        `;
+        return cantonesCache || [];
+      }
+    }
+
+    // Iniciar carga de cantones al cargar la página
+    loadCantones();
+
+    // Variables para el modo de reporte
+    let modoReporte = false;
+    let markerReporte = null;
+
+    // Abrir modal de reporte
+    document.getElementById('btn-reporte').addEventListener('click', () => {
+      document.getElementById('modal-reporte').classList.add('active');
+      modoReporte = true;
+      document.getElementById('info').innerHTML = `
+        <h3>📝 Modo Reporte</h3>
+        <p>Haz clic en el mapa para seleccionar la ubicación o usa el botón GPS en el formulario</p>
+      `;
+    });
+
+    // Cerrar modal
+    document.getElementById('btn-cancelar').addEventListener('click', () => {
+      cerrarModal();
+    });
+
+    // Cerrar con la X
+    document.getElementById('btn-cerrar-modal').addEventListener('click', () => {
+      cerrarModal();
+    });
+
+    // Minimizar/Maximizar modal
+    document.getElementById('btn-minimizar').addEventListener('click', () => {
+      const modalContent = document.getElementById('modal-content-reporte');
+      const modalBody = document.getElementById('modal-body');
+      const btnMinimizar = document.getElementById('btn-minimizar');
+      
+      if (modalContent.classList.contains('minimized')) {
+        modalContent.classList.remove('minimized');
+        modalBody.style.display = 'block';
+        btnMinimizar.textContent = '−';
+        btnMinimizar.title = 'Minimizar';
+      } else {
+        modalContent.classList.add('minimized');
+        modalBody.style.display = 'none';
+        btnMinimizar.textContent = '□';
+        btnMinimizar.title = 'Maximizar';
+      }
+    });
+
+    // Usar GPS del dispositivo
+    document.getElementById('btn-usar-gps').addEventListener('click', () => {
+      const infoPanel = document.getElementById('info');
+      
+      if (!navigator.geolocation) {
+        alert('Tu navegador no soporta geolocalización');
+        return;
+      }
+
+      infoPanel.innerHTML = `
+        <h3>📍 Obteniendo ubicación GPS...</h3>
+        <p class="loading">Espere un momento...</p>
+      `;
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const lat = position.coords.latitude;
+          const lng = position.coords.longitude;
+          const accuracy = position.coords.accuracy;
+
+          // Actualizar campos del formulario
+          document.getElementById('lat-manual').value = lat.toFixed(6);
+          document.getElementById('lng-manual').value = lng.toFixed(6);
+
+          // Centrar mapa en la ubicación
+          map.setView([lat, lng], 15);
+
+          // Agregar marcador
+          if (markerReporte) {
+            map.removeLayer(markerReporte);
+          }
+          markerReporte = L.marker([lat, lng], {
+            icon: L.divIcon({
+              className: 'custom-marker',
+              html: '<div style="background: #2563eb; width: 20px; height: 20px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>',
+              iconSize: [20, 20]
+            })
+          }).addTo(map);
+
+          // Agregar círculo de precisión
+          L.circle([lat, lng], {
+            radius: accuracy,
+            color: '#2563eb',
+            fillColor: '#2563eb',
+            fillOpacity: 0.1,
+            weight: 1
+          }).addTo(map);
+
+          infoPanel.innerHTML = `
+            <h3>📍 Ubicación GPS Capturada</h3>
+            <p><b>Lat:</b> ${lat.toFixed(6)}</p>
+            <p><b>Lng:</b> ${lng.toFixed(6)}</p>
+            <p style="font-size:12px; color:#666;">Precisión: ±${Math.round(accuracy)}m</p>
+          `;
+        },
+        (error) => {
+          let mensaje = 'Error al obtener ubicación';
+          switch(error.code) {
+            case error.PERMISSION_DENIED:
+              mensaje = 'Permiso de ubicación denegado. Por favor habilita el GPS en tu dispositivo.';
+              break;
+            case error.POSITION_UNAVAILABLE:
+              mensaje = 'Ubicación no disponible. Verifica tu conexión GPS.';
+              break;
+            case error.TIMEOUT:
+              mensaje = 'Tiempo de espera agotado. Intenta nuevamente.';
+              break;
+          }
+          
+          alert(mensaje);
+          infoPanel.innerHTML = `
+            <h3>📝 Modo Reporte</h3>
+            <p class="error">${mensaje}</p>
+            <p>Haz clic en el mapa para seleccionar manualmente</p>
+          `;
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 0
+        }
+      );
+    });
+
+    function cerrarModal() {
+      const modalContent = document.getElementById('modal-content-reporte');
+      const modalBody = document.getElementById('modal-body');
+      const btnMinimizar = document.getElementById('btn-minimizar');
+      
+      document.getElementById('modal-reporte').classList.remove('active');
+      modalContent.classList.remove('minimized');
+      modalBody.style.display = 'block';
+      btnMinimizar.textContent = '−';
+      
+      document.getElementById('form-reporte').reset();
+      document.getElementById('success-msg').style.display = 'none';
+      document.getElementById('fields-establecimiento').style.display = 'none';
+      document.getElementById('fields-via').style.display = 'none';
+      
+      modoReporte = false;
+      if (markerReporte) {
+        map.removeLayer(markerReporte);
+        markerReporte = null;
+      }
+      document.getElementById('info').innerHTML = `
+        <h3>📍 Información</h3>
+        <p>Haz clic en el mapa para identificar el cantón</p>
+      `;
+    }
+
+    // Mostrar/ocultar campos según tipo de reporte
+    document.getElementById('tipo-reporte').addEventListener('change', (e) => {
+      const tipo = e.target.value;
+      document.getElementById('fields-establecimiento').style.display = 
+        tipo === 'establecimiento' ? 'block' : 'none';
+      document.getElementById('fields-via').style.display = 
+        tipo === 'via' ? 'block' : 'none';
+    });
+
+    // Enviar reporte usando método directo (sin RPC)
+    document.getElementById('form-reporte').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      const nombreReportante = document.getElementById('nombre-reportante').value;
+      const tipoReporte = document.getElementById('tipo-reporte').value;
+      const lat = parseFloat(document.getElementById('lat-manual').value);
+      const lng = parseFloat(document.getElementById('lng-manual').value);
+      const comentario = document.getElementById('comentario').value;
+
+      const reporte = {
+        nombre_reportante: nombreReportante,
+        tipo_reporte: tipoReporte,
+        latitud: lat,
+        longitud: lng,
+        comentario: comentario || null
+      };
+
+      // Agregar campos específicos según el tipo de reporte
+      if (tipoReporte === 'establecimiento') {
+        reporte.nombre_establecimiento = document.getElementById('nombre-establecimiento').value || null;
+        reporte.tipo_establecimiento = document.getElementById('tipo-establecimiento').value || null;
+        reporte.horario_atencion = document.getElementById('horario-atencion').value || null;
+        reporte.nombre_via_ingreso = document.getElementById('via-ingreso-establecimiento').value || null;
+      } else if (tipoReporte === 'via') {
+        reporte.nombre_via_ingreso = document.getElementById('nombre-via').value || null;
+        reporte.tipo_via = document.getElementById('tipo-via').value || null;
+      }
+
+      console.log('Enviando reporte:', reporte);
+
+      try {
+        // Guardar directamente en la tabla reportes
+        const res = await fetch(`${URL}/reportes`, {
+          method: 'POST',
+          headers: {
+            ...headers,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation'
+          },
+          body: JSON.stringify(reporte)
+        });
+
+        if (res.ok) {
+          const resultado = await res.json();
+          document.getElementById('success-msg').style.display = 'block';
+          console.log('✓ Reporte guardado exitosamente:', resultado);
+          
+          // Limpiar formulario después de 2 segundos
+          setTimeout(() => {
+            cerrarModal();
+          }, 2000);
+        } else {
+          const errorText = await res.text();
+          console.error('Error del servidor:', errorText);
+          alert('Error al guardar el reporte. Asegúrate de haber ejecutado el SQL para permitir inserciones anónimas.');
+          console.log('SQL necesario: DROP POLICY IF EXISTS "Permitir insertar reportes a usuarios autenticados" ON reportes; CREATE POLICY "Permitir insertar reportes públicamente" ON reportes FOR INSERT TO anon, authenticated WITH CHECK (true);');
+        }
+      } catch (e) {
+        console.error('Error al guardar:', e);
+        alert('Error de conexión. Verifica tu conexión a internet.');
+      }
+    });
+
+    // Función para identificar cantón en una ubicación
+    async function identifyCanton(lat, lng, feature = null, layerName = null) {
+      const infoPanel = document.getElementById('info');
+      infoPanel.innerHTML = '<h3>📍 Identificando...</h3><p class="loading">Consultando cantón...</p>';
+
+      try {
+        const cantones = await loadCantones();
+        
+        if (cantones.length === 0) {
+          infoPanel.innerHTML = `
+            <h3>📍 Ubicación</h3>
+            <p><b>Coordenadas:</b> ${lat.toFixed(4)}, ${lng.toFixed(4)}</p>
+            <p class="error">No se pudieron cargar los cantones</p>
+          `;
+          return;
+        }
+        
+        let cantonEncontrado = null;
+        
+        // Buscar el cantón que contiene el punto
+        for (const canton of cantones) {
+          if (!canton.geom) continue;
+          
+          try {
+            const geom = typeof canton.geom === 'string' ? JSON.parse(canton.geom) : canton.geom;
+            
+            if (geom.type === 'Polygon') {
+              if (pointInPolygon([lng, lat], geom.coordinates[0])) {
+                cantonEncontrado = canton.dpa_descan;
+                break;
+              }
+            } else if (geom.type === 'MultiPolygon') {
+              for (const polygon of geom.coordinates) {
+                if (pointInPolygon([lng, lat], polygon[0])) {
+                  cantonEncontrado = canton.dpa_descan;
+                  break;
+                }
+              }
+              if (cantonEncontrado) break;
+            }
+          } catch (e) {
+            console.error('Error procesando cantón:', e);
+          }
+        }
+        
+        // Construir información del feature si existe
+        let featureInfo = '';
+        if (feature && layerName) {
+          const layerNames = {
+            'centros_salud': 'Centro de Salud',
+            'poblados_re': 'Poblado',
+            'uso_actual_suelo_re': 'Uso de Suelo',
+            'vias_rep': 'Vía'
+          };
+          
+          featureInfo = `<p><b>Tipo:</b> ${layerNames[layerName] || layerName}</p>`;
+          
+          // Agregar campos específicos según la capa
+          if (layerName === 'centros_salud' && feature.uni_nombre) {
+            featureInfo += `<p><b>Nombre:</b> ${feature.uni_nombre}</p>`;
+          } else if (layerName === 'poblados_re' && feature.nombre) {
+            featureInfo += `<p><b>Nombre:</b> ${feature.nombre}</p>`;
+          } else if (layerName === 'uso_actual_suelo_re') {
+            if (feature.tema) {
+              featureInfo += `<p><b>Tema:</b> ${feature.tema}</p>`;
+            }
+            if (feature.area) {
+              featureInfo += `<p><b>Área:</b> ${feature.area}</p>`;
+            }
+          } else if (layerName === 'vias_rep' && feature.tipo) {
+            featureInfo += `<p><b>Tipo:</b> ${feature.tipo}</p>`;
+          }
+        }
+        
+        if (cantonEncontrado) {
+          infoPanel.innerHTML = `
+            <h3>📍 Ubicación Identificada</h3>
+            ${featureInfo}
+            <p><b>Cantón:</b> ${cantonEncontrado}</p>
+            <p style="font-size:12px; color:#666;">Lat: ${lat.toFixed(4)}, Lng: ${lng.toFixed(4)}</p>
+          `;
+        } else {
+          infoPanel.innerHTML = `
+            <h3>📍 Ubicación</h3>
+            ${featureInfo}
+            <p><b>Coordenadas:</b> ${lat.toFixed(4)}, ${lng.toFixed(4)}</p>
+            <p>No se encontró cantón en esta ubicación</p>
+          `;
+        }
+      } catch (e) {
+        infoPanel.innerHTML = `
+          <h3>📍 Ubicación</h3>
+          <p><b>Coordenadas:</b> ${lat.toFixed(4)}, ${lng.toFixed(4)}</p>
+          <p class="error">Error: ${e.message}</p>
+        `;
+      }
+    }
+
+    // Click en el mapa para identificar cantón o seleccionar ubicación de reporte
+    map.on('click', async (e) => {
+      const { lat, lng } = e.latlng;
+      
+      // Si está en modo reporte, actualizar coordenadas
+      if (modoReporte) {
+        document.getElementById('lat-manual').value = lat.toFixed(6);
+        document.getElementById('lng-manual').value = lng.toFixed(6);
+        
+        // Agregar marcador temporal
+        if (markerReporte) {
+          map.removeLayer(markerReporte);
+        }
+        markerReporte = L.marker([lat, lng], {
+          icon: L.divIcon({
+            className: 'custom-marker',
+            html: '<div style="background: #e53e3e; width: 20px; height: 20px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>',
+            iconSize: [20, 20]
+          })
+        }).addTo(map);
+        
+        document.getElementById('info').innerHTML = `
+          <h3>📝 Ubicación Seleccionada</h3>
+          <p><b>Lat:</b> ${lat.toFixed(6)}</p>
+          <p><b>Lng:</b> ${lng.toFixed(6)}</p>
+          <p style="font-size:12px; color:#666;">Complete el formulario y guarde el reporte</p>
+        `;
+      } else {
+        await identifyCanton(lat, lng);
+      }
+    });
+
+    // Función para verificar si un punto está dentro de un polígono
+    function pointInPolygon(point, polygon) {
+      const x = point[0], y = point[1];
+      let inside = false;
+      
+      for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+        const xi = polygon[i][0], yi = polygon[i][1];
+        const xj = polygon[j][0], yj = polygon[j][1];
+        
+        const intersect = ((yi > y) !== (yj > y)) && 
+                         (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+        if (intersect) inside = !inside;
+      }
+      
+      return inside;
+    }
+  </script>
+</body>
+</html>
